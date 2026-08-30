@@ -32,7 +32,7 @@ Backend services fail in recurring, diagnosable ways: crash loops, 5xx spikes, m
 
 ## Architecture
 
-Three independently deployable services, connected only through two fixed message contracts.
+Three independently deployable services, connected only through two fixed REST API contracts — no message broker, every hop is a direct synchronous HTTP call. This is what let a 3-person team build the whole thing in parallel.
 
 ```mermaid
 flowchart TD
@@ -57,8 +57,6 @@ flowchart TD
 
     subgraph GCP["Google Cloud"]
         LOG[Cloud Logging / Monitoring]
-        PS1[(Pub/Sub: failure-events)]
-        PS2[(Pub/Sub: recovery-decisions)]
         FS[(Firestore: incident log)]
         ADMIN[Cloud Run Admin API]
     end
@@ -69,12 +67,10 @@ flowchart TD
 
     TS -->|structured logs/metrics| LOG
     LOG --> W
-    W -->|Failure Event| PS1
-    PS1 --> ORC
-    ORC -->|invoke| ADK
+    W -->|"POST /incidents (REST)"| ORC
+    ORC -->|"POST /diagnose (REST)"| ADK
     ADK --> GEM
-    GEM -->|Recovery Decision| PS2
-    PS2 --> ORC
+    GEM -->|Recovery Decision, REST response| ORC
     ORC -->|execute action| ADMIN
     ADMIN -->|rollback / patch / scale| TS
     ORC --> VER
@@ -99,8 +95,9 @@ sequenceDiagram
     T->>T: Failure triggered (e.g. 500 spike)
     T-->>W: Structured logs / metrics (via Cloud Logging)
     W->>W: Classify failure_type
-    W->>O: Publish Failure Event (Pub/Sub)
-    O->>D: Send Failure Event
+    W->>O: POST /incidents (Failure Event, REST + ID token auth)
+    O-->>W: 202 Accepted
+    O->>D: POST /diagnose (Failure Event, REST)
     D->>D: Diagnose root cause (Gemini)
     D->>D: Validate action against fixed action set
     D-->>O: Return Recovery Decision
@@ -115,7 +112,9 @@ sequenceDiagram
 
 ### Message Contracts
 
-**Failure Event** (Watcher → Orchestrator)
+Both are REST request/response bodies — there is no message broker in the system.
+
+**Failure Event** (Watcher → Orchestrator, `POST /incidents` request body)
 ```json
 {
   "service_id": "string",
@@ -128,7 +127,7 @@ sequenceDiagram
 }
 ```
 
-**Recovery Decision** (Diagnosis Agent → Orchestrator)
+**Recovery Decision** (Diagnosis Agent → Orchestrator, `POST /diagnose` response body)
 ```json
 {
   "service_id": "string",
@@ -151,7 +150,7 @@ sequenceDiagram
 | Backend (all services) | Python 3.11, FastAPI |
 | AI reasoning | Gemini 3.5 Flash via Google Agent Development Kit (ADK) |
 | Compute | Google Cloud Run |
-| Messaging | Google Cloud Pub/Sub |
+| Inter-service communication | REST/HTTP, Cloud Run service-to-service auth (`roles/run.invoker` + ID tokens) — no message broker |
 | State / audit log | Google Firestore |
 | Monitoring source | Google Cloud Logging, Google Cloud Monitoring |
 | Infra control plane | Cloud Run Admin API |
@@ -198,45 +197,55 @@ cp .env.example .env
 ### 2. Enable required GCP APIs
 ```bash
 gcloud services enable run.googleapis.com \
-  pubsub.googleapis.com \
   firestore.googleapis.com \
   logging.googleapis.com \
   monitoring.googleapis.com \
   aiplatform.googleapis.com
 ```
+Note: there's no Pub/Sub dependency — all inter-service communication is direct REST calls between Cloud Run services.
 
 ### 3. Provision infra
 ```bash
-# Pub/Sub topics
-gcloud pubsub topics create failure-events
-gcloud pubsub topics create recovery-decisions
-
 # Firestore (Native mode)
 gcloud firestore databases create --region=<GCP_REGION>
 ```
 
 ### 4. Deploy each service
 ```bash
-# Target (buggy) service
+# Target (buggy) service — public, so the demo triggers are reachable
 gcloud run deploy automend-target --source ./services/target-service --allow-unauthenticated
 
-# Watcher
-gcloud run deploy automend-watcher --source ./services/watcher
+# Watcher — no public access needed, only calls out
+gcloud run deploy automend-watcher --source ./services/watcher --no-allow-unauthenticated
 
-# Diagnosis Agent
-gcloud run deploy automend-diagnosis --source ./services/diagnosis-agent --set-env-vars GEMINI_API_KEY=$GEMINI_API_KEY
+# Diagnosis Agent — only the Orchestrator should call it
+gcloud run deploy automend-diagnosis --source ./services/diagnosis-agent --set-env-vars GEMINI_API_KEY=$GEMINI_API_KEY --no-allow-unauthenticated
 
-# Orchestrator
-gcloud run deploy automend-orchestrator --source ./services/orchestrator --allow-unauthenticated
+# Orchestrator — only the Watcher should call it
+gcloud run deploy automend-orchestrator --source ./services/orchestrator --no-allow-unauthenticated
 ```
 
-### 5. Deploy the dashboard
+### 5. Grant service-to-service invoke permissions
+Since there's no message broker, each caller needs explicit permission to invoke the service it talks to directly:
+```bash
+# Watcher's service account needs run.invoker on the Orchestrator
+gcloud run services add-iam-policy-binding automend-orchestrator \
+  --member="serviceAccount:<watcher-sa>@<project>.iam.gserviceaccount.com" \
+  --role="roles/run.invoker"
+
+# Orchestrator's service account needs run.invoker on the Diagnosis Agent
+gcloud run services add-iam-policy-binding automend-diagnosis \
+  --member="serviceAccount:<orchestrator-sa>@<project>.iam.gserviceaccount.com" \
+  --role="roles/run.invoker"
+```
+
+### 6. Deploy the dashboard
 ```bash
 cd dashboard
 firebase deploy --only hosting
 ```
 
-### 6. Verify
+### 7. Verify
 Visit the printed Cloud Run URL for `automend-target` to confirm the app is live, and the Firebase Hosting URL to confirm the dashboard loads (it will be empty until an incident occurs).
 
 ---
