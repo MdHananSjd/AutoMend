@@ -3,7 +3,7 @@
 This document is the canonical technical reference for the system. The README links here for anyone (judges, contributors) who wants the full picture beyond the top-level overview.
 
 ## 1. Overview
-AutoMend is composed of three independently deployable Cloud Run services plus a static dashboard, communicating only through two fixed, versioned message contracts. This document describes the components, the data flow between them, the exact contracts, the data model, and the safety properties of the system.
+AutoMend is composed of three independently deployable Cloud Run services plus a static dashboard, communicating exclusively through two fixed, versioned REST API contracts — there is no message broker in the system; every hop is a synchronous HTTP request. This document describes the components, the data flow between them, the exact contracts, the data model, and the safety properties of the system.
 
 ## 2. Components
 
@@ -15,15 +15,15 @@ A small Flask/FastAPI application deployed on Cloud Run, instrumented with struc
 - A hang/stall endpoint exceeding the readiness probe timeout (`health_check_failure`)
 
 ### 2.2 Watcher (`services/watcher`)
-A polling process (Cloud Run job or scheduled Cloud Function) that queries Cloud Logging and Cloud Monitoring for the target service. It applies rule-based classifiers per failure type and, on a positive match, publishes a **Failure Event** to the `failure-events` Pub/Sub topic.
+A polling process (Cloud Run job or scheduled Cloud Function) that queries Cloud Logging and Cloud Monitoring for the target service. It applies rule-based classifiers per failure type and, on a positive match, calls the Orchestrator's `POST /incidents` endpoint directly with a **Failure Event** payload. The call is authenticated via a Cloud Run ID token (the Watcher's service account needs `roles/run.invoker` on the Orchestrator), and the Watcher retries with backoff on failure since there's no broker providing delivery guarantees.
 
 ### 2.3 Diagnosis Agent (`services/diagnosis-agent`)
 A stateless decision service built on Google's Agent Development Kit (ADK), using Gemini 3.5 Flash as the reasoning model. It receives a Failure Event, constructs a diagnosis prompt (failure type, log snippet, metrics, last known good revision), and returns a structured **Recovery Decision** via ADK's structured output/function-calling. A validation layer rejects any `chosen_action` outside the fixed enum and falls back to a deterministic rule.
 
 ### 2.4 Orchestrator (`services/orchestrator`)
 The coordinator, and the only component with write access to infrastructure. It:
-- Receives Failure Events via a Pub/Sub **push subscription** (not pull — Cloud Run scales to zero, so push is the correct delivery model here).
-- Calls the Diagnosis Agent and receives a Recovery Decision.
+- Receives Failure Events via a `POST /incidents` REST endpoint, called directly by the Watcher.
+- Calls the Diagnosis Agent's REST endpoint synchronously and receives a Recovery Decision in the response.
 - Executes the decision against the target service via the **Cloud Run Admin API**.
 - Verifies the outcome by polling health/error-rate for a short window.
 - Writes the full incident lifecycle to Firestore.
@@ -56,8 +56,6 @@ flowchart TD
 
     subgraph GCP["Google Cloud"]
         LOG[Cloud Logging / Monitoring]
-        PS1[(Pub/Sub: failure-events)]
-        PS2[(Pub/Sub: recovery-decisions)]
         FS[(Firestore: incident log)]
         ADMIN[Cloud Run Admin API]
     end
@@ -68,12 +66,10 @@ flowchart TD
 
     TS -->|structured logs/metrics| LOG
     LOG --> W
-    W -->|Failure Event| PS1
-    PS1 --> ORC
-    ORC -->|invoke| ADK
+    W -->|"POST /incidents (REST, Failure Event)"| ORC
+    ORC -->|"POST /diagnose (REST, invoke)"| ADK
     ADK --> GEM
-    GEM -->|Recovery Decision| PS2
-    PS2 --> ORC
+    GEM -->|"Recovery Decision (REST response)"| ORC
     ORC -->|execute action| ADMIN
     ADMIN -->|rollback / patch / scale| TS
     ORC --> VER
@@ -96,12 +92,13 @@ sequenceDiagram
     T->>T: Failure triggered (e.g. 500 spike)
     T-->>W: Structured logs / metrics (via Cloud Logging)
     W->>W: Classify failure_type
-    W->>O: Publish Failure Event (Pub/Sub push)
+    W->>O: POST /incidents (Failure Event, REST + ID token auth)
+    O-->>W: 202 Accepted
     O->>F: Write incident (status: received)
-    O->>D: Send Failure Event
+    O->>D: POST /diagnose (Failure Event, REST)
     D->>D: Diagnose root cause (Gemini)
     D->>D: Validate action against fixed action set
-    D-->>O: Return Recovery Decision
+    D-->>O: 200 OK (Recovery Decision)
     O->>F: Update incident (status: diagnosing → action_taken)
     O->>C: Execute chosen_action (rollback / patch / scale / restart)
     C-->>T: Apply recovery (new revision / traffic shift)
@@ -113,9 +110,9 @@ sequenceDiagram
 
 ## 5. Message Contracts
 
-These two schemas are the only coupling between A's, B's, and C's components. Treat them as frozen once agreed — any change requires a 3-way sync.
+These two schemas are the only coupling between A's, B's, and C's components — both are REST request/response bodies, not message-broker payloads. Treat them as frozen once agreed — any change requires a 3-way sync.
 
-### 5.1 Failure Event (Watcher → Orchestrator)
+### 5.1 Failure Event (Watcher → Orchestrator, `POST /incidents` request body)
 ```json
 {
   "service_id": "string",
@@ -132,7 +129,7 @@ These two schemas are the only coupling between A's, B's, and C's components. Tr
 }
 ```
 
-### 5.2 Recovery Decision (Diagnosis Agent → Orchestrator)
+### 5.2 Recovery Decision (Diagnosis Agent → Orchestrator, `POST /diagnose` response body)
 ```json
 {
   "service_id": "string",
@@ -176,7 +173,7 @@ Incident documents are written incrementally — status is updated at each stage
 - **Validated execution:** every decision is validated before the Orchestrator acts on it; invalid output falls back to a deterministic rule rather than being executed or silently dropped.
 - **Verified outcomes:** every recovery action is followed by a verification window; a failed verification is marked `escalated`, not retried automatically, which prevents recovery loops against infrastructure that can't be fixed by the available actions.
 - **Least-privilege execution:** only the Orchestrator holds credentials capable of modifying infrastructure (via the Cloud Run Admin API). The Diagnosis Agent never has direct infrastructure access — it only returns a decision.
-- **Idempotency:** Pub/Sub delivery is at-least-once. The Orchestrator checks for an in-progress incident for a given `service_id` before acting, so redelivered or duplicate Failure Events don't trigger conflicting recovery attempts.
+- **Idempotency:** since there's no broker providing delivery guarantees, the Watcher retries failed `POST /incidents` calls with backoff — which means the Orchestrator can receive the same Failure Event more than once. The Orchestrator checks for an in-progress incident for a given `service_id` before acting, so a retried call doesn't trigger a second, conflicting recovery attempt.
 
 ## 8. Technology Stack
 
@@ -185,7 +182,7 @@ Incident documents are written incrementally — status is updated at each stage
 | Backend (all services) | Python 3.11, FastAPI |
 | AI reasoning | Gemini 3.5 Flash via Google Agent Development Kit (ADK) |
 | Compute | Google Cloud Run |
-| Messaging | Google Cloud Pub/Sub (push subscriptions) |
+| Inter-service communication | REST/HTTP, Cloud Run service-to-service auth (IAM `roles/run.invoker` + ID tokens) — no message broker |
 | State / audit log | Google Firestore |
 | Monitoring source | Google Cloud Logging, Google Cloud Monitoring |
 | Infra control plane | Cloud Run Admin API |
