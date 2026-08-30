@@ -32,7 +32,7 @@ Backend services fail in recurring, diagnosable ways: crash loops, 5xx spikes, m
 
 ## Architecture
 
-Three independently deployable services, connected only through two fixed message contracts — this is what let a 3-person team build the whole thing in parallel.
+Three independently deployable services, connected only through two fixed message contracts.
 
 ```mermaid
 flowchart TD
