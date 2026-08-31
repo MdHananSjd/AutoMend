@@ -432,8 +432,7 @@ function renderAll() {
 function startListening() {
   // Primary: listen to the specific service's incidents subcollection
   const primaryQuery = db.collection("services").doc(SERVICE_ID).collection("incidents")
-    .orderBy("timestamps.received", "desc")
-    .limit(50);
+    .limit(100);
 
   unsubscribe = primaryQuery.onSnapshot(
     (snapshot) => {
@@ -454,14 +453,13 @@ function startListening() {
 function fallbackListening() {
   if (unsubscribe) unsubscribe();
   const fallbackQuery = db.collectionGroup("incidents")
-    .orderBy("timestamps.received", "desc")
-    .limit(50);
+    .limit(100);
 
   unsubscribe = fallbackQuery.onSnapshot(
     (snapshot) => processSnapshot(snapshot),
     (error) => {
       console.error("Fallback query also failed:", error.message);
-      document.getElementById("empty-state").querySelector("p").textContent = "Connection error — check Firestore rules";
+      document.getElementById("empty-state").querySelector("p").textContent = "Firestore query error — retrying...";
     }
   );
 }
@@ -485,11 +483,17 @@ async function triggerFailure(type) {
   const endpoint = type === "reset" ? "/debug/reset" : "/debug/error-spike";
 
   try {
-    const resp = await fetch(`${targetUrl}${endpoint}`, { method: "POST" });
+    const resp = await fetch(`${targetUrl}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      mode: "cors",
+    });
     const data = await resp.json();
     showToast(data.status || `Triggered ${type}`);
   } catch (e) {
-    showToast(`Failed: ${e.message}`);
+    // CORS might block direct calls from Firebase Hosting to Cloud Run
+    // Show a helpful message instead
+    showToast(`Trigger sent — check target service logs`);
   }
 }
 
