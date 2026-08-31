@@ -1,0 +1,56 @@
+{
+  "crash_loop": {
+    "service_id": "automend-target",
+    "revision_id": "automend-target-00042-xyz",
+    "timestamp": "2026-08-31T10:15:00Z",
+    "failure_type": "crash_loop",
+    "log_snippet": "Traceback (most recent call last):\nFile \"app.py\", line 12\nImportError: cannot import name 'foo'\nContainer exited with status 1\nContainer exited with status 1\nContainer exited with status 1",
+    "metrics": {"error_rate": 1.0, "memory_mb": 128, "restart_count": 6},
+    "last_known_good_revision": "automend-target-00041-abc"
+  },
+  "error_rate_spike": {
+    "service_id": "automend-target",
+    "revision_id": "automend-target-00042-xyz",
+    "timestamp": "2026-08-31T10:20:00Z",
+    "failure_type": "error_rate_spike",
+    "log_snippet": "500 Internal Server Error /checkout\n500 Internal Server Error /checkout\n500 Internal Server Error /checkout",
+    "metrics": {"error_rate": 0.62, "memory_mb": 256, "restart_count": 0},
+    "last_known_good_revision": "automend-target-00041-abc"
+  },
+  "memory_leak": {
+    "service_id": "automend-target",
+    "revision_id": "automend-target-00042-xyz",
+    "timestamp": "2026-08-31T10:25:00Z",
+    "failure_type": "memory_leak",
+    "log_snippet": "memory usage 490MB / 512MB\nmemory usage 505MB / 512MB\nOOMKilled",
+    "metrics": {"error_rate": 0.05, "memory_mb": 505, "restart_count": 1},
+    "last_known_good_revision": "automend-target-00041-abc"
+  },
+  "bad_deploy": {
+    "service_id": "automend-target",
+    "revision_id": "automend-target-00043-broken",
+    "timestamp": "2026-08-31T10:30:00Z",
+    "failure_type": "bad_deploy",
+    "log_snippet": "FATAL: missing required env var DATABASE_URL\nContainer failed to start",
+    "metrics": {"error_rate": 1.0, "memory_mb": 64, "restart_count": 3},
+    "last_known_good_revision": "automend-target-00041-abc"
+  },
+  "health_check_failure": {
+    "service_id": "automend-target",
+    "revision_id": "automend-target-00042-xyz",
+    "timestamp": "2026-08-31T10:35:00Z",
+    "failure_type": "health_check_failure",
+    "log_snippet": "GET /health timed out after 10000ms\nGET /health timed out after 10000ms",
+    "metrics": {"error_rate": 0.0, "memory_mb": 300, "restart_count": 0},
+    "last_known_good_revision": "automend-target-00041-abc"
+  },
+  "dependency_failure": {
+    "service_id": "automend-target",
+    "revision_id": "automend-target-00042-xyz",
+    "timestamp": "2026-08-31T10:40:00Z",
+    "failure_type": "dependency_failure",
+    "log_snippet": "ConnectionError: could not connect to postgres:5432\nConnectionError: could not connect to postgres:5432",
+    "metrics": {"error_rate": 0.4, "memory_mb": 200, "restart_count": 0},
+    "last_known_good_revision": "automend-target-00041-abc"
+  }
+}
