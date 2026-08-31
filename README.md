@@ -16,10 +16,11 @@ AutoMend watches a live backend service running on Google Cloud Run. When it cra
 - [Data Flow](#data-flow)
 - [Tech Stack](#tech-stack)
 - [Repository Structure](#repository-structure)
-- [Setup Instructions (for judges)](#setup-instructions-for-judges)
+- [Live Deployment](#live-deployment)
 - [Running the Demo](#running-the-demo)
 - [Safety Design](#safety-design)
 - [CI/CD](#cicd)
+- [Known Issues & Fixes Applied](#known-issues--fixes-applied)
 - [Team](#team)
 - [Roadmap](#roadmap)
 
@@ -32,17 +33,17 @@ Backend services fail in recurring, diagnosable ways: crash loops, 5xx spikes, m
 
 ## Architecture
 
-Three independently deployable services, connected only through two fixed REST API contracts — no message broker, every hop is a direct synchronous HTTP call. This is what let a 3-person team build the whole thing in parallel.
+Three independently deployable Cloud Run services, connected only through two fixed REST API contracts — no message broker, every hop is a direct synchronous HTTP call.
 
 ```mermaid
 flowchart TD
     subgraph Target["Target Service (Cloud Run)"]
-        TS[Flask/FastAPI App]
+        TS[FastAPI App]
         DBG[Debug-gated failure triggers]
     end
 
     subgraph WatcherBox["Watcher"]
-        W[Log/Metric Classifier]
+        W[Cloud Logging Classifier]
     end
 
     subgraph Diagnosis["Diagnosis Agent"]
@@ -56,7 +57,7 @@ flowchart TD
     end
 
     subgraph GCP["Google Cloud"]
-        LOG[Cloud Logging / Monitoring]
+        LOG[Cloud Logging]
         FS[(Firestore: incident log)]
         ADMIN[Cloud Run Admin API]
     end
@@ -65,16 +66,16 @@ flowchart TD
         UI[Live incident viewer]
     end
 
-    TS -->|structured logs/metrics| LOG
+    TS -->|structured logs| LOG
     LOG --> W
-    W -->|"POST /incidents (REST)"| ORC
-    ORC -->|"POST /diagnose (REST)"| ADK
+    W -->|"POST /incidents (REST + ID token)"| ORC
+    ORC -->|"POST /diagnose (REST + ID token)"| ADK
     ADK --> GEM
-    GEM -->|Recovery Decision, REST response| ORC
+    GEM -->|Recovery Decision| ORC
     ORC -->|execute action| ADMIN
     ADMIN -->|rollback / patch / scale| TS
     ORC --> VER
-    VER -->|poll health| TS
+    VER -->|poll /health| TS
     ORC -->|write incident| FS
     FS --> UI
 ```
@@ -93,20 +94,19 @@ sequenceDiagram
     participant F as Firestore
 
     T->>T: Failure triggered (e.g. 500 spike)
-    T-->>W: Structured logs / metrics (via Cloud Logging)
+    T-->>W: Structured logs (via Cloud Logging)
     W->>W: Classify failure_type
     W->>O: POST /incidents (Failure Event, REST + ID token auth)
     O-->>W: 202 Accepted
-    O->>D: POST /diagnose (Failure Event, REST)
+    O->>D: POST /diagnose (Failure Event, REST + ID token auth)
     D->>D: Diagnose root cause (Gemini)
     D->>D: Validate action against fixed action set
-    D-->>O: Return Recovery Decision
+    D-->>O: 200 OK (Recovery Decision)
     O->>C: Execute chosen_action (rollback / patch / scale / restart)
     C-->>T: Apply recovery (new revision / traffic shift)
-    O->>T: Poll health/error-rate
+    O->>T: Poll /health
     T-->>O: Health status
     O->>F: Write full incident record
-    F-->>O: Confirmed
     Note over O,F: Incident marked recovered / failed / escalated
 ```
 
@@ -150,10 +150,10 @@ Both are REST request/response bodies — there is no message broker in the syst
 | Backend (all services) | Python 3.11, FastAPI |
 | AI reasoning | Gemini 3.5 Flash via Google Agent Development Kit (ADK) |
 | Compute | Google Cloud Run |
-| Inter-service communication | REST/HTTP, Cloud Run service-to-service auth (`roles/run.invoker` + ID tokens) — no message broker |
-| State / audit log | Google Firestore |
-| Monitoring source | Google Cloud Logging, Google Cloud Monitoring |
-| Infra control plane | Cloud Run Admin API |
+| Inter-service communication | REST/HTTP, Cloud Run service-to-service auth (ID tokens + `roles/run.invoker`) |
+| State / audit log | Google Firestore (Native mode) |
+| Monitoring source | Google Cloud Logging |
+| Infra control plane | Cloud Run Admin API (v2 Python client) |
 | Dashboard | Static HTML/CSS/JS on Firebase Hosting, reading Firestore directly (read-only) |
 | Containerization | Docker |
 | CI/CD | GitHub Actions → `gcloud run deploy --source .` on push to `main` |
@@ -162,121 +162,122 @@ Both are REST request/response bodies — there is no message broker in the syst
 
 ## Repository Structure
 ```
-automend/
+AutoMend/
 ├── services/
-│   ├── target-service/       # Buggy Flask/FastAPI app + failure triggers
-│   ├── watcher/               # Log/metric classifier, publishes Failure Events
-│   ├── diagnosis-agent/       # Gemini + ADK decision service
-│   └── orchestrator/          # Recovery execution, verification, Firestore writes
-├── dashboard/                  # Static incident viewer (Firebase Hosting)
-├── .github/workflows/          # Per-service deploy workflows
+│   ├── target-service/       # Buggy FastAPI app + debug-gated failure triggers
+│   ├── watcher/              # Cloud Logging classifier → publishes Failure Events
+│   ├── diagnosis-agent/      # Gemini + ADK decision service
+│   └── orchestrator/         # Recovery execution, verification, Firestore writes
+├── dashboard/                # Static incident viewer (Firebase Hosting)
+├── scripts/
+│   └── setup-gcp.sh          # One-shot GCP provisioning script
+├── .github/workflows/        # Per-service deploy workflows
 ├── docs/
-│   └── architecture.md
-└── README.md
+│   ├── architecture.md       # Full technical reference
+│   ├── deployment-guide.md   # Step-by-step deployment instructions
+│   ├── demo-script.md        # Demo walkthrough
+│   ├── demo-hardening.md     # Demo reliability notes
+│   └── person-a-handoff.md   # Person A integration guide
+├── .env.example              # Environment variable template
+└── README.md                 # This file
 ```
 
 ---
 
-## Setup Instructions (for judges)
+## Live Deployment
 
-### Prerequisites
-- A Google Cloud project with billing enabled
-- `gcloud` CLI installed and authenticated (`gcloud auth login`)
-- Docker installed
-- A Firebase project linked to the same GCP project (for the dashboard)
-- Gemini API access enabled in the GCP project
+All four services are deployed and verified on Google Cloud Run (project: `automend-hackathon`, region: `us-central1`):
 
-### 1. Clone and configure
-```bash
-git clone https://github.com/<your-org>/automend.git
-cd automend
-cp .env.example .env
-# Fill in: GCP_PROJECT_ID, GCP_REGION, GEMINI_API_KEY
-```
+| Service | URL | Status |
+|---|---|---|
+| Target Service | `https://automend-target-247530183292.us-central1.run.app` | ✅ Deployed, DEBUG_MODE=true |
+| Watcher | `https://automend-watcher-247530183292.us-central1.run.app` | ✅ Deployed, MOCK_MODE=false |
+| Diagnosis Agent | `https://automend-diagnosis-247530183292.us-central1.run.app` | ✅ Deployed |
+| Orchestrator | `https://automend-orchestrator-247530183292.us-central1.run.app` | ✅ Deployed, DISABLE_AUTH=false |
 
-### 2. Enable required GCP APIs
-```bash
-gcloud services enable run.googleapis.com \
-  firestore.googleapis.com \
-  logging.googleapis.com \
-  monitoring.googleapis.com \
-  aiplatform.googleapis.com
-```
-Note: there's no Pub/Sub dependency — all inter-service communication is direct REST calls between Cloud Run services.
+**Dashboard:** Firebase Hosting (see Firebase Console for URL)
 
-### 3. Provision infra
-```bash
-# Firestore (Native mode)
-gcloud firestore databases create --region=<GCP_REGION>
-```
-
-### 4. Deploy each service
-```bash
-# Target (buggy) service — public, so the demo triggers are reachable
-gcloud run deploy automend-target --source ./services/target-service --allow-unauthenticated
-
-# Watcher — no public access needed, only calls out
-gcloud run deploy automend-watcher --source ./services/watcher --no-allow-unauthenticated
-
-# Diagnosis Agent — only the Orchestrator should call it
-gcloud run deploy automend-diagnosis --source ./services/diagnosis-agent --set-env-vars GEMINI_API_KEY=$GEMINI_API_KEY --no-allow-unauthenticated
-
-# Orchestrator — only the Watcher should call it
-gcloud run deploy automend-orchestrator --source ./services/orchestrator --no-allow-unauthenticated
-```
-
-### 5. Grant service-to-service invoke permissions
-Since there's no message broker, each caller needs explicit permission to invoke the service it talks to directly:
-```bash
-# Watcher's service account needs run.invoker on the Orchestrator
-gcloud run services add-iam-policy-binding automend-orchestrator \
-  --member="serviceAccount:<watcher-sa>@<project>.iam.gserviceaccount.com" \
-  --role="roles/run.invoker"
-
-# Orchestrator's service account needs run.invoker on the Diagnosis Agent
-gcloud run services add-iam-policy-binding automend-diagnosis \
-  --member="serviceAccount:<orchestrator-sa>@<project>.iam.gserviceaccount.com" \
-  --role="roles/run.invoker"
-```
-
-### 6. Deploy the dashboard
-```bash
-cd dashboard
-firebase deploy --only hosting
-```
-
-### 7. Verify
-Visit the printed Cloud Run URL for `automend-target` to confirm the app is live, and the Firebase Hosting URL to confirm the dashboard loads (it will be empty until an incident occurs).
+**Service Accounts:**
+| Account | Roles |
+|---|---|
+| `automend-orchestrator@...` | `roles/run.admin`, `roles/datastore.user`, `roles/artifactregistry.reader`, `roles/iam.serviceAccountUser` |
+| `automend-watcher@...` | `roles/logging.viewer`, `roles/monitoring.viewer` + `roles/run.invoker` on orchestrator |
+| `automend-diagnosis@...` | (none on project level; orchestrator invokes it via `roles/run.invoker`) |
 
 ---
 
 ## Running the Demo
-1. Open the target service's `/break` endpoint (or trigger a bad deploy via the provided script in `services/target-service/triggers/`) to force a failure.
-2. Watch the dashboard — within seconds, an incident should appear: failure detected → diagnosis reasoning → recovery action taken → verification result.
-3. Confirm the target service is healthy again by hitting its normal endpoint.
 
-A full walkthrough script is in `docs/demo-script.md`; a recorded run is linked in the submission video.
+### Prerequisites
+- `gcloud` CLI authenticated (`gcloud auth login`)
+- All four services deployed (see Live Deployment above)
+- Firebase project linked for dashboard
+
+### Step-by-step demo
+1. **Show healthy state:** `curl https://automend-target-247530183292.us-central1.run.app/health` → `{"status": "ok"}`
+2. **Trigger failure:** `curl -X POST https://automend-target-247530183292.us-central1.run.app/debug/error-spike`
+3. **Wait 10-15 seconds** for the Watcher to detect, classify, and dispatch to Orchestrator
+4. **Watch dashboard** — incident appears: `received` → `diagnosing` → `action_taken` → `verifying` → `recovered`/`escalated`
+5. **Verify recovery:** `curl https://automend-target-247530183292.us-central1.run.app/health`
+6. **Reset:** `curl -X POST https://automend-target-247530183292.us-central1.run.app/debug/reset`
+
+### Available failure triggers
+```bash
+# Error rate spike (500s on all non-health endpoints)
+curl -X POST https://automend-target-247530183292.us-central1.run.app/debug/error-spike
+
+# Memory leak (allocates MB until OOM)
+curl -X POST https://automend-target-247530183292.us-central1.run.app/debug/leak-memory
+
+# Health check hang (requests stall past probe timeout)
+curl -X POST https://automend-target-247530183292.us-central1.run.app/debug/hang
+
+# Crash loop (process exits, restarts in crash loop)
+curl -X POST https://automend-target-247530183292.us-central1.run.app/debug/crash
+
+# Reset all failure states
+curl -X POST https://automend-target-247530183292.us-central1.run.app/debug/reset
+```
 
 ---
 
 ## Safety Design
-- The diagnosis agent's output is constrained to a fixed, pre-approved action enum — never free-form commands.
-- Every action is validated before execution; invalid output falls back to a deterministic rule (e.g., crash loop → rollback) rather than being executed or dropped.
-- Every recovery is verified post-execution; a failed verification is marked `escalated`, not retried indefinitely — this prevents recovery loops.
-- Only the Orchestrator holds infrastructure credentials. The LLM never has direct access to the Cloud Run Admin API.
+- **Closed action space:** the Diagnosis Agent can only select from five pre-approved actions; nothing outside that enum can be executed.
+- **Validated execution:** every decision is validated before the Orchestrator acts on it; invalid output falls back to a deterministic rule.
+- **Verified outcomes:** every recovery action is followed by a verification window; a failed verification is marked `escalated`, not retried automatically.
+- **Least-privilege execution:** only the Orchestrator holds infrastructure credentials. The LLM never has direct access to the Cloud Run Admin API.
+- **Idempotency:** the Orchestrator checks for an in-progress incident for a given `service_id` before acting, so retried calls don't trigger duplicate recovery attempts.
 
 ---
 
 ## CI/CD
-Each service has a minimal GitHub Actions workflow (`.github/workflows/`) that deploys to Cloud Run on push to `main` via `gcloud run deploy --source .`. This keeps every merge to `main` a working, deployed "last known good" revision — which is also literally the mechanism AutoMend uses to recover the target service, so the pipeline doubles as the rollback source of truth.
+Each service has a GitHub Actions workflow (`.github/workflows/`) that deploys to Cloud Run on push to `main` via `gcloud run deploy --source .`. The orchestrator workflow uses `--min-instances=0` for zero cost when idle.
+
+---
+
+## Known Issues & Fixes Applied
+
+### Bugs fixed during integration testing
+1. **Watcher couldn't detect failures** — `gcp_client.py` wasn't unwrapping `jsonPayload` from Cloud Logging entries, so `status_code`/`event_type` fields were nested and invisible to the classifier.
+2. **Recovery actions failed with "Unknown field for Service: spec"** — `recovery.py` used `template.spec.containers` which doesn't exist in the Cloud Run v2 API. Fixed to `template.containers`.
+3. **Orchestrator couldn't call Diagnosis Agent** — `decision_client.py` made unauthenticated HTTP calls against a `--no-allow-unauthenticated` service. Added OIDC ID token auth.
+4. **Firestore query crash** — `get_active_incident` used `.where().order_by()` requiring a composite index that takes minutes to build. Simplified to `.where().limit()`.
+5. **Empty watcher Dockerfile** — A's Dockerfile was empty; container crashed on startup.
+6. **Watcher imported from tests/** — `gcp_client.py` imported `MOCK_SCENARIOS` from `tests.mock_data` which doesn't exist in the container image. Inlined the mock data.
+7. **Missing `__init__.py` files** — Orchestrator and diagnosis-agent packages lacked `__init__.py`, causing import failures.
+
+### IAM permissions required (added during integration)
+- `roles/artifactregistry.reader` on orchestrator SA (to pull images when deploying new revisions)
+- `roles/iam.serviceAccountUser` on orchestrator SA (to act as target service's SA during deploys)
+- `roles/run.invoker` cross-service bindings (watcher→orchestrator, orchestrator→diagnosis)
 
 ---
 
 ## Team
 Built by a 3-person team for Google's All Things Agentic hackathon:
-- **Person A** — Target service & failure detection (Watcher)
-- **Person B** — Diagnosis agent (Gemini + ADK)
-- **Person C** — Orchestration, recovery execution, infrastructure, and reporting
+- **Person A** — Target Service & Watcher (failure detection)
+- **Person B** — Diagnosis Agent (Gemini + ADK)
+- **Person C** — Orchestrator, Infrastructure, Dashboard (recovery execution)
 
 ---
 

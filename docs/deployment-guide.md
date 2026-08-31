@@ -1,221 +1,134 @@
-# Chunk 6 — Person A Deployment & Verification Guide (Google Cloud Run)
+# AutoMend — Deployment Guide
 
-This guide documents the exact GCP Cloud Run deployment process, IAM configurations, demo reliability tuning, and step-by-step verification checklist for Person A (**Target Service** and **Watcher**).
+Step-by-step guide for deploying all four services to Google Cloud Run.
 
----
+## Prerequisites
+- `gcloud` CLI installed and authenticated
+- Docker installed
+- Firebase CLI installed (`npm install -g firebase-tools`)
+- GCP project with billing enabled
 
-## 1. Target Service Deployment
+## 1. GCP Setup
 
-The Target Service (`automend-target`) is deployed to Google Cloud Run as a public endpoint so that Person C's Orchestrator can perform post-recovery health polling (`GET /health`).
-
-### Environment Variables
-- `DEBUG_MODE=true` — Enables debug failure injection endpoints (`/debug/error-spike`, `/debug/leak-memory`, `/debug/hang`, `/debug/crash`, `/debug/reset`).
-- `SERVICE_ID=automend-target` — Identifies the service in structured JSON log entries.
-
-### Exact Deployment Command
+Run the provisioning script:
 ```bash
-cd services/target-service
-gcloud run deploy automend-target \
-  --source . \
-  --region us-central1 \
-  --platform managed \
-  --allow-unauthenticated \
-  --min-instances 1 \
-  --set-env-vars "DEBUG_MODE=true,SERVICE_ID=automend-target"
+bash scripts/setup-gcp.sh
 ```
 
----
+This creates:
+- Firestore database (Native mode, us-central1)
+- Service accounts: `automend-orchestrator`, `automend-watcher`, `automend-diagnosis`
+- IAM bindings for cross-service auth
 
-## 2. Watcher Service Account & IAM Setup
-
-The Watcher requires read access to Google Cloud Logging/Monitoring to detect failures, and authorization to invoke the Orchestrator's `POST /incidents` REST endpoint using Cloud Run ID token authentication (`roles/run.invoker`).
-
-### Minimum IAM Principles
-Watcher requires ONLY:
-1. `roles/logging.viewer` on the GCP Project (to read Cloud Run log streams).
-2. `roles/monitoring.viewer` on the GCP Project (to fetch metric statistics).
-3. `roles/run.invoker` on the Orchestrator Cloud Run service.
-
-Watcher does **NOT** receive:
-- `roles/run.admin` (Infrastructure control is owned by Person C).
-- Firestore write/read access.
-- Gemini / ADK API access.
-
-### Exact IAM Setup Commands
+### Manual IAM additions needed after setup script:
 ```bash
-# 1. Create Dedicated Service Account
-gcloud iam service-accounts create automend-watcher-sa \
-  --display-name="AutoMend Watcher Service Account"
+# Orchestrator needs to pull images when deploying new revisions
+gcloud projects add-iam-policy-binding automend-hackathon \
+  --member="serviceAccount:automend-orchestrator@automend-hackathon.iam.gserviceaccount.com" \
+  --role="roles/artifactregistry.reader"
 
-# 2. Grant Logging Viewer
-gcloud projects add-iam-policy-binding YOUR_GCP_PROJECT_ID \
-  --member="serviceAccount:automend-watcher-sa@YOUR_GCP_PROJECT_ID.iam.gserviceaccount.com" \
-  --role="roles/logging.viewer"
+# Orchestrator needs to act as target service's SA
+gcloud projects add-iam-policy-binding automend-hackathon \
+  --member="serviceAccount:automend-orchestrator@automend-hackathon.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountUser"
+```
 
-# 3. Grant Monitoring Viewer
-gcloud projects add-iam-policy-binding YOUR_GCP_PROJECT_ID \
-  --member="serviceAccount:automend-watcher-sa@YOUR_GCP_PROJECT_ID.iam.gserviceaccount.com" \
-  --role="roles/monitoring.viewer"
+## 2. Deploy Target Service
 
-# 4. Grant Invoker Permission on Orchestrator
+```bash
+gcloud run deploy automend-target \
+  --source ./services/target-service \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --min-instances 0 \
+  --set-env-vars "DEBUG_MODE=true,SERVICE_ID=automend-target" \
+  --project automend-hackathon
+```
+
+## 3. Deploy Watcher
+
+```bash
+gcloud run deploy automend-watcher \
+  --source ./services/watcher \
+  --region us-central1 \
+  --no-allow-unauthenticated \
+  --min-instances 0 \
+  --service-account automend-watcher@automend-hackathon.iam.gserviceaccount.com \
+  --set-env-vars "MOCK_MODE=false,DISABLE_AUTH=false,ORCHESTRATOR_URL=https://automend-orchestrator-247530183292.us-central1.run.app/incidents,GCP_PROJECT_ID=automend-hackathon,SERVICE_ID=automend-target" \
+  --project automend-hackathon
+```
+
+## 4. Deploy Diagnosis Agent
+
+```bash
+gcloud run deploy automend-diagnosis \
+  --source ./services/diagnosis-agent \
+  --region us-central1 \
+  --no-allow-unauthenticated \
+  --min-instances 0 \
+  --set-env-vars "GOOGLE_API_KEY=your-ai-studio-key" \
+  --project automend-hackathon
+```
+
+## 5. Deploy Orchestrator
+
+```bash
+gcloud run deploy automend-orchestrator \
+  --source ./services/orchestrator \
+  --region us-central1 \
+  --no-allow-unauthenticated \
+  --min-instances 0 \
+  --service-account automend-orchestrator@automend-hackathon.iam.gserviceaccount.com \
+  --set-env-vars "DIAGNOSIS_AGENT_URL=https://automend-diagnosis-247530183292.us-central1.run.app,TARGET_SERVICE_URL=https://automend-target-247530183292.us-central1.run.app/health,TARGET_CLOUD_RUN_SERVICE=automend-target,GCP_PROJECT_ID=automend-hackathon,DISABLE_AUTH=false" \
+  --project automend-hackathon
+```
+
+## 6. Grant Cross-Service Invoke Permissions
+
+```bash
+# Watcher → Orchestrator
 gcloud run services add-iam-policy-binding automend-orchestrator \
   --region us-central1 \
-  --member="serviceAccount:automend-watcher-sa@YOUR_GCP_PROJECT_ID.iam.gserviceaccount.com" \
+  --member="serviceAccount:automend-watcher@automend-hackathon.iam.gserviceaccount.com" \
+  --role="roles/run.invoker"
+
+# Orchestrator → Diagnosis Agent
+gcloud run services add-iam-policy-binding automend-diagnosis \
+  --region us-central1 \
+  --member="serviceAccount:automend-orchestrator@automend-hackathon.iam.gserviceaccount.com" \
+  --role="roles/run.invoker"
+
+# Orchestrator → Target Service (for health polling)
+gcloud run services add-iam-policy-binding automend-target \
+  --region us-central1 \
+  --member="serviceAccount:automend-orchestrator@automend-hackathon.iam.gserviceaccount.com" \
   --role="roles/run.invoker"
 ```
 
----
+## 7. Deploy Dashboard
 
-## 3. Watcher Deployment
-
-The Watcher (`automend-watcher`) runs on Cloud Run as an internal background process bound to `automend-watcher-sa`.
-
-### Environment Variables
-- `GCP_PROJECT_ID=YOUR_GCP_PROJECT_ID`
-- `SERVICE_ID=automend-target`
-- `ORCHESTRATOR_URL=https://automend-orchestrator-xxxxxx-uc.a.run.app/incidents`
-- `MOCK_MODE=false` — Enables real GCP Cloud Logging fetching.
-- `DISABLE_AUTH=false` — Enables Google Cloud Run OIDC ID token generation for Person C handoff.
-- `POLL_INTERVAL_SEC=5` — High frequency polling for quick demo feedback.
-- `COOLDOWN_SEC=60` — Prevents duplicate incident storms for the same failure signature.
-
-### Exact Deployment Command
 ```bash
-cd services/watcher
-gcloud run deploy automend-watcher \
-  --source . \
-  --region us-central1 \
-  --platform managed \
-  --no-allow-unauthenticated \
-  --min-instances 1 \
-  --service-account automend-watcher-sa@YOUR_GCP_PROJECT_ID.iam.gserviceaccount.com \
-  --set-env-vars "GCP_PROJECT_ID=YOUR_GCP_PROJECT_ID,SERVICE_ID=automend-target,ORCHESTRATOR_URL=https://automend-orchestrator-xxxxxx-uc.a.run.app/incidents,MOCK_MODE=false,DISABLE_AUTH=false,POLL_INTERVAL_SEC=5,COOLDOWN_SEC=60"
+cd dashboard
+firebase deploy --only hosting --project automend-hackathon
 ```
 
----
+## 8. Verify
 
-## 4. Demo Reliability & Timing Analysis
-
-To ensure a seamless live demonstration without unexpected delays:
-
-| Metric / Parameter | Configured Value | Explanation |
-|---|---|---|
-| **Min Instances (`--min-instances`)** | `1` | Eliminates Cloud Run cold-start latency (0s container spin-up overhead). |
-| **Polling Interval (`POLL_INTERVAL_SEC`)** | `5 seconds` | Watcher checks GCP logs every 5 seconds. |
-| **Detection Window** | `Recent 100 entries (~5 min)` | Evaluates latest active log entries to capture freshly injected errors. |
-| **Expected Detection Latency** | `~5 to 10 seconds` | Time from triggering `/debug/*` endpoint to Watcher classification. |
-| **Expected Handoff Latency** | `~1 to 2 seconds` | Time for Watcher to fetch ID token, construct payload, and hit `POST /incidents`. |
-| **Total Person A Latency** | **`~6 to 12 seconds`** | Fast and predictable demo response time. |
-
----
-
-## 5. Step-by-Step Verification Checklist
-
-Follow these verification steps in order to confirm the full Person A implementation before handing off to Person C:
-
-### Step 1: Verify Target Cloud Run Service Health
 ```bash
-TARGET_URL=$(gcloud run services describe automend-target --region us-central1 --format 'value(status.url)')
-curl -i "$TARGET_URL/"
+TOKEN=$(gcloud auth print-identity-token)
+
+# Health checks
+curl -H "Authorization: Bearer $TOKEN" https://automend-target-247530183292.us-central1.run.app/health
+curl -H "Authorization: Bearer $TOKEN" https://automend-orchestrator-247530183292.us-central1.run.app/health
+curl -H "Authorization: Bearer $TOKEN" https://automend-watcher-247530183292.us-central1.run.app/health
+curl -H "Authorization: Bearer $TOKEN" https://automend-diagnosis-247530183292.us-central1.run.app/health
+
+# Trigger test failure
+curl -X POST -H "Authorization: Bearer $TOKEN" https://automend-target-247530183292.us-central1.run.app/debug/error-spike
 ```
-**Expected Output:**
-`HTTP/1.1 200 OK`
-`{"status":"ok","message":"Target Service Operational"}`
 
----
-
-### Step 2: Verify `/health` Endpoint
-```bash
-curl -i "$TARGET_URL/health"
-```
-**Expected Output:**
-`HTTP/1.1 200 OK`
-`{"status": "ok", "error_rate": 0.0, "memory_mb": <int>}`
-
----
-
-### Step 3: Trigger Injected Failure (Error Spike)
-```bash
-curl -i -X POST "$TARGET_URL/debug/error-spike"
-```
-**Expected Output:**
-`HTTP/1.1 200 OK`
-`{"status": "error_rate_spike triggered"}`
-
-Generate traffic to register 500 responses:
-```bash
-curl -i "$TARGET_URL/"
-```
-**Expected Output:**
-`HTTP/1.1 500 Internal Server Error`
-`{"error": "Internal Server Error (Injected)"}`
-
----
-
-### Step 4: Verify Logs in Cloud Logging
-```bash
-gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="automend-target"' --limit 5 --format json
-```
-**Expected Output:** JSON log stream containing `"event_type": "error_rate_spike"`, `"status_code": 500`, and severity `ERROR`.
-
----
-
-### Step 5: Verify Watcher Log Processing
-```bash
-gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="automend-watcher"' --limit 10
-```
-**Expected Output:** Log entry stating: `Failure classified: error_rate_spike. Dispatching to Orchestrator...`
-
----
-
-### Step 6: Verify Watcher Authentication & Handoff (`POST /incidents`)
-```bash
-gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="automend-watcher" AND textPayload:"Incident"' --limit 5
-```
-**Expected Output:**
-`Incident inc-xxxxxx acknowledged by Orchestrator.`
-
----
-
-### Step 7: Reset Target Service to Healthy State
-```bash
-curl -i -X POST "$TARGET_URL/debug/reset"
-curl -i "$TARGET_URL/health"
-```
-**Expected Output:**
-`HTTP/1.1 200 OK`
-`{"status": "service reset to healthy state"}`
-`{"status": "ok", "error_rate": 0.0, "memory_mb": <int>}`
-
----
-
-## 6. Troubleshooting Commands
-
-If issues occur during GCP deployment or testing:
-
-1. **Check Target Service Logs:**
-   ```bash
-   gcloud run services logs tail automend-target --region us-central1
-   ```
-
-2. **Check Watcher Logs:**
-   ```bash
-   gcloud run services logs tail automend-watcher --region us-central1
-   ```
-
-3. **Verify Watcher Service Account IAM Bindings:**
-   ```bash
-   gcloud projects get-iam-policy YOUR_GCP_PROJECT_ID \
-     --flatten="bindings[].members" \
-     --format="table(bindings.role)" \
-     --filter="bindings.members:automend-watcher-sa"
-   ```
-
-4. **Verify Orchestrator Endpoint direct access using ID token:**
-   ```bash
-   TOKEN=$(gcloud auth print-identity-token)
-   curl -i -H "Authorization: Bearer $TOKEN" \
-     -H "Content-Type: application/json" \
-     -d '{"service_id":"automend-target","revision_id":"rev-001","timestamp":"2026-08-31T12:00:00Z","failure_type":"error_rate_spike","log_snippet":"test","metrics":{"error_rate":0.8,"memory_mb":50,"restart_count":0},"last_known_good_revision":"rev-001"}' \
-     https://automend-orchestrator-xxxxxx-uc.a.run.app/incidents
-   ```
+## Cost Guardrails
+- **ALL services use `--min-instances=0`** — zero cost when idle
+- Set a $1 billing budget alert at https://console.cloud.google.com/billing/budgets
+- Free tier covers: 2M Cloud Run requests, 1 GiB Firestore, 10 GB Firebase Hosting per month
+- Total projected cost for hackathon: **$0**
