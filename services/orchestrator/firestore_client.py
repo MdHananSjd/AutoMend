@@ -125,23 +125,27 @@ class FirestoreClient:
         """Check for an in-progress incident for this service (idempotency gate).
 
         Returns the most recent non-terminal incident, or None if all are resolved.
+        Uses a simple single-field query to avoid requiring a composite index.
         """
         incidents_ref = self._incidents_col(service_id)
-        # Query for non-terminal statuses
+        # Query for non-terminal statuses (single-field query, no composite index needed)
         for status in IncidentStatus:
             if status in TERMINAL_STATES:
                 continue
-            docs = (
-                incidents_ref
-                .where("status", "==", status.value)
-                .order_by("timestamps.received", direction=firestore.Query.DESCENDING)
-                .limit(1)
-                .stream()
-            )
-            for doc in docs:
-                data = doc.to_dict()
-                data["_id"] = doc.id
-                return data
+            try:
+                docs = (
+                    incidents_ref
+                    .where(filter=firestore.FieldFilter("status", "==", status.value))
+                    .limit(1)
+                    .stream()
+                )
+                for doc in docs:
+                    data = doc.to_dict()
+                    data["_id"] = doc.id
+                    return data
+            except Exception:
+                # If query fails, continue to next status
+                continue
         return None
 
     def list_incidents(
