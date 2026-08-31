@@ -52,7 +52,7 @@ echo "▶ Creating Firestore database (Native mode, ${REGION})"
 if gcloud firestore databases describe --project="${PROJECT_ID}" &>/dev/null; then
   echo "  ✓ Firestore database already exists"
 else
-  gcloud firestore databases create --region="${REGION}" --project="${PROJECT_ID}"
+  gcloud firestore databases create --location="${REGION}" --project="${PROJECT_ID}"
   echo "  ✓ Firestore database created"
 fi
 

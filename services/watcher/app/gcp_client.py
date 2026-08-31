@@ -3,7 +3,65 @@ import json
 from datetime import datetime, timezone
 from typing import Tuple, List, Dict, Any
 from app.config import Config
-from tests.mock_data import MOCK_SCENARIOS
+
+# ─── Mock scenarios (used only when MOCK_MODE=true) ─────────────────────────
+# Inlined here to avoid importing from tests/ — the tests/ directory is not
+# present in the production container image.
+MOCK_SCENARIOS: Dict[str, Dict[str, Any]] = {
+    "healthy": {
+        "current_revision": "rev-001",
+        "last_known_good_revision": "rev-001",
+        "metrics": {"error_rate": 0.0, "memory_mb": 35, "restart_count": 0},
+        "logs": [
+            {"message": "Request processed successfully", "status_code": 200, "path": "/"},
+            {"message": "Request processed successfully", "status_code": 200, "path": "/health"},
+        ],
+    },
+    "error_rate_spike": {
+        "current_revision": "rev-001",
+        "last_known_good_revision": "rev-001",
+        "metrics": {"error_rate": 0.85, "memory_mb": 40, "restart_count": 0},
+        "logs": [
+            {"message": "Request failure observed", "status_code": 500, "path": "/api/data", "event_type": "error_rate_spike"},
+            {"message": "Request failure observed", "status_code": 500, "path": "/api/data"},
+        ],
+    },
+    "memory_leak": {
+        "current_revision": "rev-001",
+        "last_known_good_revision": "rev-001",
+        "metrics": {"error_rate": 0.0, "memory_mb": 850, "restart_count": 0},
+        "logs": [{"message": "Failure injected", "event_type": "memory_leak"}],
+    },
+    "crash_loop": {
+        "current_revision": "rev-002",
+        "last_known_good_revision": "rev-001",
+        "metrics": {"error_rate": 0.0, "memory_mb": 0, "restart_count": 5},
+        "logs": [{"message": "Crash loop state detected on startup. Crashing immediately.", "event_type": "crash_loop"}],
+    },
+    "bad_deploy": {
+        "current_revision": "rev-003",
+        "last_known_good_revision": "rev-001",
+        "metrics": {"error_rate": 0.0, "memory_mb": 0, "restart_count": 0},
+        "logs": [{"message": "Startup failed: Invalid configuration detected", "event_type": "bad_deploy"}],
+    },
+    "health_check_failure": {
+        "current_revision": "rev-001",
+        "last_known_good_revision": "rev-001",
+        "metrics": {"error_rate": 0.0, "memory_mb": 40, "restart_count": 0},
+        "logs": [
+            {"message": "Health check probe failed", "status_code": 500, "path": "/health"},
+            {"message": "Health check probe failed", "status_code": 500, "path": "/health"},
+            {"message": "Health check probe failed", "status_code": 500, "path": "/health"},
+        ],
+    },
+    "dependency_failure": {
+        "current_revision": "rev-001",
+        "last_known_good_revision": "rev-001",
+        "metrics": {"error_rate": 0.1, "memory_mb": 40, "restart_count": 0},
+        "logs": [{"message": "Database error: Connection refused to 10.0.0.5", "event_type": "dependency_failure"}],
+    },
+}
+
 
 class GCPClient:
     """Fetches logs and metrics from Google Cloud Logging/Monitoring or Mocks."""
@@ -23,32 +81,41 @@ class GCPClient:
             scenario["logs"],
             scenario["metrics"],
             scenario["current_revision"],
-            scenario["last_known_good_revision"]
+            scenario["last_known_good_revision"],
         )
 
     def _fetch_real_gcp_data(self) -> Tuple[List[Dict[str, Any]], Dict[str, float], str, str]:
         from google.cloud import logging as cloud_logging
 
-        logs = []
+        logs: List[Dict[str, Any]] = []
         current_rev = "unknown"
         lkgr = "unknown"
-        metrics = {
+        metrics: Dict[str, float] = {
             "error_rate": 0.0,
             "memory_mb": 0,
-            "restart_count": 0
+            "restart_count": 0,
         }
 
         try:
             log_client = cloud_logging.Client(project=Config.PROJECT_ID)
-            
-            # Query logs for the target Cloud Run service
-            filter_str = f'resource.type="cloud_run_revision" AND resource.labels.service_name="{Config.SERVICE_ID}"'
-            entries = log_client.list_entries(filter_=filter_str, order_by=cloud_logging.DESCENDING, max_results=100)
-            
+
+            filter_str = (
+                f'resource.type="cloud_run_revision" '
+                f'AND resource.labels.service_name="{Config.SERVICE_ID}"'
+            )
+            entries = log_client.list_entries(
+                filter_=filter_str,
+                order_by=cloud_logging.DESCENDING,
+                max_results=100,
+            )
+
             for entry in entries:
-                # Extract revision_name from Cloud Run resource labels if available
-                rev_label = entry.resource.labels.get("revision_name", "unknown") if entry.resource and entry.resource.labels else "unknown"
-                
+                rev_label = (
+                    entry.resource.labels.get("revision_name", "unknown")
+                    if entry.resource and entry.resource.labels
+                    else "unknown"
+                )
+
                 if isinstance(entry.payload, dict):
                     log_data = dict(entry.payload)
                 elif isinstance(entry.payload, str):
@@ -64,7 +131,7 @@ class GCPClient:
 
                 if current_rev == "unknown" and log_rev != "unknown":
                     current_rev = log_rev
-                
+
                 # LKGR inference: find most recent healthy startup log
                 if log_data.get("status") == "ready" and log_rev != "unknown":
                     if lkgr == "unknown":
@@ -72,9 +139,10 @@ class GCPClient:
 
                 logs.append(log_data)
         except Exception as err:
-            # Log error gracefully and return safe default observability snapshot
             import logging
-            logging.getLogger("watcher.gcp_client").error(f"GCP Observability fetch error (recovering): {err}")
+            logging.getLogger("watcher.gcp_client").error(
+                f"GCP Observability fetch error (recovering): {err}"
+            )
 
         if current_rev == "unknown":
             current_rev = f"{Config.SERVICE_ID}-v1"

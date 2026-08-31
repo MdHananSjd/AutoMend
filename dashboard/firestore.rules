@@ -1,0 +1,15 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow read access to incidents for the dashboard
+    // Writes are done server-side by the orchestrator using Admin SDK (bypasses rules)
+    match /services/{serviceId}/incidents/{incidentId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    // collectionGroup queries need index on timestamps.received
+    match /{document=**} {
+      allow read: if true;
+    }
+  }
+}

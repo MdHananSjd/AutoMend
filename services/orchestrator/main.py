@@ -190,7 +190,7 @@ async def _run_recovery_pipeline(
         )
         logger.info("Step 3: Verifying health for incident %s", incident_id)
 
-        verification = await verify_health()
+        verification = await verify_health(service_id=failure_event.service_id)
 
         fs.update_incident(
             service_id,

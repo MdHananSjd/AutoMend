@@ -19,11 +19,11 @@ class Config:
     # Service URLs — swap these for real URLs once A and B deploy
     DIAGNOSIS_AGENT_URL: str = os.getenv(
         "DIAGNOSIS_AGENT_URL",
-        "https://automend-diagnosis-placeholder-uc.a.run.app",
+        "https://automend-diagnosis-247530183292.us-central1.run.app",
     )
     TARGET_SERVICE_URL: str = os.getenv(
         "TARGET_SERVICE_URL",
-        "https://automend-target-placeholder-uc.a.run.app",
+        "https://automend-target-247530183292.us-central1.run.app/health",
     )
 
     # Timeouts and polling

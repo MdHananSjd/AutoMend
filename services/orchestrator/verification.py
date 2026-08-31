@@ -20,9 +20,31 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
+# Map service_id → health URL (extend as more services are added)
+_SERVICE_HEALTH_URLS: dict[str, str] = {}
 
-async def verify_health() -> dict[str, Any]:
+
+def register_service_health_url(service_id: str, health_url: str) -> None:
+    """Register a service's health check URL."""
+    _SERVICE_HEALTH_URLS[service_id] = health_url
+
+
+def _resolve_health_url(service_id: str | None = None) -> str:
+    """Resolve the health check URL for a given service.
+
+    Falls back to config.TARGET_SERVICE_URL if no mapping exists.
+    """
+    if service_id and service_id in _SERVICE_HEALTH_URLS:
+        return _SERVICE_HEALTH_URLS[service_id]
+    return f"{config.TARGET_SERVICE_URL.rstrip('/')}/health"
+
+
+async def verify_health(service_id: str | None = None) -> dict[str, Any]:
     """Poll the target service's GET /health endpoint.
+
+    Args:
+        service_id: The specific service to verify. If None, uses the
+                    default TARGET_SERVICE_URL from config.
 
     Checks every VERIFICATION_POLL_INTERVAL_SECONDS for up to
     VERIFICATION_WINDOW_SECONDS total.
@@ -31,11 +53,11 @@ async def verify_health() -> dict[str, Any]:
         {
             "healthy": bool,
             "attempts": int,
-            "response": dict | None,  # last health response if available
-            "error": str | None,      # last error if all attempts failed
+            "response": dict | None,
+            "error": str | None,
         }
     """
-    url = f"{config.TARGET_SERVICE_URL.rstrip('/')}/health"
+    url = _resolve_health_url(service_id)
     poll_interval = config.VERIFICATION_POLL_INTERVAL_SECONDS
     window = config.VERIFICATION_WINDOW_SECONDS
 
@@ -119,9 +141,6 @@ async def verify_health() -> dict[str, Any]:
     }
 
 
-def verify_health_sync() -> dict[str, Any]:
-    """Synchronous wrapper for verify_health().
-
-    Used when the caller is not async.
-    """
-    return asyncio.run(verify_health())
+def verify_health_sync(service_id: str | None = None) -> dict[str, Any]:
+    """Synchronous wrapper for verify_health()."""
+    return asyncio.run(verify_health(service_id=service_id))

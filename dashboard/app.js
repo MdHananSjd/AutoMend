@@ -11,13 +11,16 @@
 // ⚠ Replace these values with your actual Firebase project config.
 // Find them in: Firebase Console → Project Settings → General → Your apps → Firebase SDK snippet
 
+// ─── Firebase Configuration ──────────────────────────────────────────────
+// These values are project identifiers, not secrets. Firebase web API keys
+// are public by design — security is enforced by Firestore rules, not the key.
 const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
+    apiKey: "AIzaSyARIULZpu714_Qw0IC72yPIz0Kg3eHEIbE",
     authDomain: "automend-hackathon.firebaseapp.com",
     projectId: "automend-hackathon",
     storageBucket: "automend-hackathon.appspot.com",
-    messagingSenderId: "YOUR_SENDER_ID",
-    appId: "YOUR_APP_ID",
+    messagingSenderId: "247530183292",
+    appId: "1:247530183292:web:f98560c12c52931ed747f9",
 };
 
 // ─── Initialize Firebase ─────────────────────────────────────────────────
