@@ -34,7 +34,7 @@ app = FastAPI(title="AutoMend Diagnosis Agent")
 
 class Metrics(BaseModel):
     error_rate: float = 0.0
-    memory_mb: float = 0.0
+    memory_mb: int = 0
     restart_count: int = 0
 
 
@@ -52,7 +52,7 @@ class ActionParams(BaseModel):
     target_revision: str = ""
     env_key: str = ""
     env_value: str = ""
-    memory_mb: float = 0
+    memory_mb: int = 0
 
 
 class RecoveryDecision(BaseModel):
