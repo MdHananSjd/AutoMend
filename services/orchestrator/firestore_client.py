@@ -32,10 +32,7 @@ class FirestoreClient:
     """Firestore client for the AutoMend incident log."""
 
     def __init__(self) -> None:
-        self.db = firestore.Client(
-            project=config.GCP_PROJECT_ID,
-            region=config.GCP_REGION,
-        )
+        self.db = firestore.Client(project=config.GCP_PROJECT_ID)
 
     # ─── Incident document helpers ────────────────────────────────────────
 
