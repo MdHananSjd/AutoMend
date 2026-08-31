@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoMend — Incident Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1>🔧 AutoMend</h1>
+            <p class="subtitle">Autonomous Self-Healing Incident Dashboard</p>
+        </div>
+        <div class="status-indicator" id="connection-status">
+            <span class="dot"></span>
+            <span class="label">Connecting...</span>
+        </div>
+    </header>
+
+    <main>
+        <div class="stats-bar" id="stats-bar">
+            <div class="stat">
+                <span class="stat-value" id="stat-total">0</span>
+                <span class="stat-label">Total Incidents</span>
+            </div>
+            <div class="stat recovered">
+                <span class="stat-value" id="stat-recovered">0</span>
+                <span class="stat-label">Recovered</span>
+            </div>
+            <div class="stat in-progress">
+                <span class="stat-value" id="stat-in-progress">0</span>
+                <span class="stat-label">In Progress</span>
+            </div>
+            <div class="stat failed">
+                <span class="stat-value" id="stat-failed">0</span>
+                <span class="stat-label">Failed / Escalated</span>
+            </div>
+        </div>
+
+        <div class="incidents-container">
+            <h2>Recent Incidents</h2>
+            <div id="incidents-list" class="incidents-list">
+                <div class="empty-state" id="empty-state">
+                    <p>⏳ Waiting for incidents...</p>
+                    <p class="hint">Trigger a failure on the Target Service to see AutoMend in action.</p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <p>AutoMend — Built for Google's All Things Agentic Hackathon</p>
+    </footer>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
