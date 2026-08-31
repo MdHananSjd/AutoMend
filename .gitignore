@@ -167,6 +167,9 @@ venv.bak/
 # mkdocs documentation
 /site
 
+# ADK local cache
+.adk/
+
 # mypy
 .mypy_cache/
 .dmypy.json
