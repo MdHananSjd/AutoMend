@@ -1,61 +1,507 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AutoMend — Incident Dashboard</title>
-    <link rel="stylesheet" href="styles.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AutoMend — Incident Console</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+            mono: ['Geist Mono', 'JetBrains Mono', 'Fira Code', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: #09090b; color: #e4e4e7; }
+
+    /* Radial grid background */
+    .bg-grid {
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(34,197,94,0.06), transparent),
+        radial-gradient(circle at 1px 1px, rgba(255,255,255,0.03) 1px, transparent 0);
+      background-size: 100% 100%, 24px 24px;
+    }
+
+    /* Pulse beacon */
+    @keyframes beacon-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.5); }
+      50% { box-shadow: 0 0 0 6px rgba(34,197,94,0); }
+    }
+    .beacon { animation: beacon-pulse 2s ease-in-out infinite; }
+
+    /* Radar scan for empty state */
+    @keyframes radar-sweep {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .radar-sweep { animation: radar-sweep 3s linear infinite; }
+
+    /* Fade-in for cards */
+    @keyframes fade-in-up {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in { animation: fade-in-up 0.3s ease-out forwards; }
+
+    /* Status pill shimmer */
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    .shimmer-active {
+      background-size: 200% 100%;
+      animation: shimmer 2s linear infinite;
+    }
+
+    /* Step progress bar */
+    .step-bar { transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1); }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+
+    /* JSON syntax highlighting */
+    .json-key { color: #a78bfa; }
+    .json-string { color: #34d399; }
+    .json-number { color: #f59e0b; }
+    .json-bool { color: #f472b6; }
+    .json-null { color: #6b7280; }
+  </style>
 </head>
-<body>
-    <header>
-        <div class="header-content">
-            <h1>🔧 AutoMend</h1>
-            <p class="subtitle">Autonomous Self-Healing Incident Dashboard</p>
-        </div>
-        <div class="status-indicator" id="connection-status">
-            <span class="dot"></span>
-            <span class="label">Connecting...</span>
-        </div>
-    </header>
+<body class="bg-grid min-h-screen">
 
-    <main>
-        <div class="stats-bar" id="stats-bar">
-            <div class="stat">
-                <span class="stat-value" id="stat-total">0</span>
-                <span class="stat-label">Total Incidents</span>
+  <!-- ═══════════════ HEADER ═══════════════ -->
+  <header class="sticky top-0 z-50 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-xl">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+      <div class="flex h-16 items-center justify-between">
+        <!-- Logo + Beacon -->
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2.5">
+            <div class="relative">
+              <div class="h-2.5 w-2.5 rounded-full bg-emerald-500 beacon"></div>
+              <div class="absolute inset-0 h-2.5 w-2.5 rounded-full bg-emerald-400 opacity-40"></div>
             </div>
-            <div class="stat recovered">
-                <span class="stat-value" id="stat-recovered">0</span>
-                <span class="stat-label">Recovered</span>
-            </div>
-            <div class="stat in-progress">
-                <span class="stat-value" id="stat-in-progress">0</span>
-                <span class="stat-label">In Progress</span>
-            </div>
-            <div class="stat failed">
-                <span class="stat-value" id="stat-failed">0</span>
-                <span class="stat-label">Failed / Escalated</span>
-            </div>
+            <span class="text-sm font-semibold tracking-tight text-zinc-100">AutoMend</span>
+          </div>
+          <span class="hidden sm:inline-flex items-center rounded-full border border-zinc-800 bg-zinc-900/50 px-2.5 py-0.5 text-[11px] font-medium text-zinc-400">
+            Autonomous Self-Healing Active
+          </span>
         </div>
 
-        <div class="incidents-container">
-            <h2>Recent Incidents</h2>
-            <div id="incidents-list" class="incidents-list">
-                <div class="empty-state" id="empty-state">
-                    <p>⏳ Waiting for incidents...</p>
-                    <p class="hint">Trigger a failure on the Target Service to see AutoMend in action.</p>
-                </div>
-            </div>
+        <!-- Target Service Badge -->
+        <div class="flex items-center gap-3">
+          <a href="https://automend-target-247530183292.us-central1.run.app/health"
+             target="_blank"
+             class="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-1.5 text-xs font-mono text-zinc-400 hover:border-zinc-700 hover:text-zinc-300 transition-colors">
+            <i data-lucide="cloud" class="h-3 w-3"></i>
+            automend-target
+            <i data-lucide="external-link" class="h-3 w-3 opacity-40"></i>
+          </a>
+          <!-- Trigger Buttons -->
+          <div class="flex items-center gap-1.5">
+            <button onclick="triggerFailure('error-spike')"
+              class="rounded-lg border border-zinc-800 bg-zinc-900/50 px-2.5 py-1.5 text-[11px] font-medium text-zinc-400 hover:border-amber-800/50 hover:bg-amber-500/5 hover:text-amber-400 transition-all"
+              title="Trigger error-rate spike">
+              <i data-lucide="zap" class="h-3 w-3"></i>
+            </button>
+            <button onclick="triggerFailure('reset')"
+              class="rounded-lg border border-zinc-800 bg-zinc-900/50 px-2.5 py-1.5 text-[11px] font-medium text-zinc-400 hover:border-emerald-800/50 hover:bg-emerald-500/5 hover:text-emerald-400 transition-all"
+              title="Reset to healthy state">
+              <i data-lucide="rotate-ccw" class="h-3 w-3"></i>
+            </button>
+          </div>
         </div>
-    </main>
+      </div>
+    </div>
+  </header>
 
-    <footer>
-        <p>AutoMend — Built for Google's All Things Agentic Hackathon</p>
-    </footer>
+  <!-- ═══════════════ STATS BAR ═══════════════ -->
+  <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pt-6">
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3" id="stats-bar">
+      <div class="rounded-xl border border-zinc-800/80 bg-zinc-900/50 backdrop-blur-sm px-4 py-3">
+        <div class="text-[11px] font-medium uppercase tracking-wider text-zinc-500">Active</div>
+        <div class="mt-1 text-2xl font-semibold text-zinc-100" id="stat-active">0</div>
+      </div>
+      <div class="rounded-xl border border-zinc-800/80 bg-zinc-900/50 backdrop-blur-sm px-4 py-3">
+        <div class="text-[11px] font-medium uppercase tracking-wider text-zinc-500">Recovery Rate</div>
+        <div class="mt-1 text-2xl font-semibold text-emerald-400" id="stat-recovery">—</div>
+      </div>
+      <div class="rounded-xl border border-zinc-800/80 bg-zinc-900/50 backdrop-blur-sm px-4 py-3">
+        <div class="text-[11px] font-medium uppercase tracking-wider text-zinc-500">Avg. Heal Time</div>
+        <div class="mt-1 text-2xl font-semibold text-zinc-100" id="stat-heal-time">—</div>
+      </div>
+      <div class="rounded-xl border border-zinc-800/80 bg-zinc-900/50 backdrop-blur-sm px-4 py-3">
+        <div class="text-[11px] font-medium uppercase tracking-wider text-zinc-500">Revisions</div>
+        <div class="mt-1 text-2xl font-semibold text-zinc-100" id="stat-revisions">0</div>
+      </div>
+    </div>
+  </div>
 
-    <!-- Firebase SDK -->
-    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-    <script src="app.js"></script>
+  <!-- ═══════════════ INCIDENT FEED ═══════════════ -->
+  <main class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
+    <!-- Loading / Empty State -->
+    <div id="empty-state" class="flex flex-col items-center justify-center py-24">
+      <div class="relative h-32 w-32 mb-6">
+        <svg class="h-full w-full" viewBox="0 0 128 128">
+          <circle cx="64" cy="64" r="56" fill="none" stroke="rgba(34,197,94,0.1)" stroke-width="1"/>
+          <circle cx="64" cy="64" r="40" fill="none" stroke="rgba(34,197,94,0.08)" stroke-width="1"/>
+          <circle cx="64" cy="64" r="24" fill="none" stroke="rgba(34,197,94,0.06)" stroke-width="1"/>
+          <line x1="64" y1="64" x2="64" y2="8" stroke="rgba(34,197,94,0.3)" stroke-width="1.5" stroke-linecap="round" class="radar-sweep" style="transform-origin: 64px 64px"/>
+        </svg>
+        <div class="absolute inset-0 flex items-center justify-center">
+          <div class="h-2 w-2 rounded-full bg-emerald-500 beacon"></div>
+        </div>
+      </div>
+      <p class="text-sm text-zinc-500 font-medium">Monitoring Cloud Run telemetry...</p>
+      <p class="text-xs text-zinc-600 mt-1">All systems healthy</p>
+    </div>
+
+    <!-- Incident Cards Container -->
+    <div id="incidents-container" class="space-y-3 hidden"></div>
+  </main>
+
+  <!-- ═══════════════ TOAST ═══════════════ -->
+  <div id="toast" class="fixed bottom-6 right-6 z-50 hidden">
+    <div class="rounded-xl border border-zinc-800 bg-zinc-900/90 backdrop-blur-xl px-4 py-3 shadow-2xl flex items-center gap-2 text-sm text-zinc-300">
+      <i data-lucide="check-circle-2" class="h-4 w-4 text-emerald-400"></i>
+      <span id="toast-text"></span>
+    </div>
+  </div>
+
+<script>
+// ═══════════════ FIREBASE INIT ═══════════════
+const firebaseConfig = {
+  apiKey: "AIzaSyARIULZpu714_Qw0IC72yPIz0Kg3eHEIbE",
+  authDomain: "automend-hackathon.firebaseapp.com",
+  projectId: "automend-hackathon",
+  storageBucket: "automend-hackathon.appspot.com",
+  messagingSenderId: "247530183292",
+  appId: "1:247530183292:web:f98560c12c52931ed747f9",
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// ═══════════════ STATE ═══════════════
+let incidents = [];
+let unsubscribe = null;
+
+// ═══════════════ CONSTANTS ═══════════════
+const SERVICE_ID = "automend-target";
+const STEPS = ["received", "diagnosing", "action_taken", "verifying", "recovered"];
+const STEP_LABELS = { received: "Received", diagnosing: "Diagnosing", action_taken: "Action Executed", verifying: "Verifying", recovered: "Resolved" };
+const FAILURE_LABELS = {
+  crash_loop: { label: "Crash Loop", icon: "🔄", color: "text-orange-400 bg-orange-500/10 border-orange-500/20" },
+  error_rate_spike: { label: "Error Spike", icon: "📈", color: "text-amber-400 bg-amber-500/10 border-amber-500/20" },
+  memory_leak: { label: "Memory Leak", icon: "💾", color: "text-purple-400 bg-purple-500/10 border-purple-500/20" },
+  bad_deploy: { label: "Bad Deploy", icon: "🚀", color: "text-red-400 bg-red-500/10 border-red-500/20" },
+  health_check_failure: { label: "Health Check", icon: "❤️‍🩹", color: "text-pink-400 bg-pink-500/10 border-pink-500/20" },
+  dependency_failure: { label: "Dependency", icon: "🔗", color: "text-cyan-400 bg-cyan-500/10 border-cyan-500/20" },
+};
+const STATUS_STYLES = {
+  recovered: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
+  failed: "bg-rose-500/10 text-rose-400 border border-rose-500/20",
+  escalated: "bg-rose-500/10 text-rose-400 border border-rose-500/20",
+  verifying: "bg-blue-500/10 text-blue-400 border border-blue-500/20 shimmer-active",
+  action_taken: "bg-amber-500/10 text-amber-400 border border-amber-500/20 shimmer-active",
+  diagnosing: "bg-violet-500/10 text-violet-400 border border-violet-500/20 shimmer-active",
+  received: "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20",
+};
+
+// ═══════════════ HELPERS ═══════════════
+function timeAgo(date) {
+  if (!date) return "—";
+  const d = date instanceof Date ? date : (date?.toDate ? date.toDate() : new Date(date));
+  if (isNaN(d)) return "—";
+  const secs = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function formatTime(date) {
+  if (!date) return "—";
+  const d = date instanceof Date ? date : (date?.toDate ? date.toDate() : new Date(date));
+  if (isNaN(d)) return "—";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function healTime(inc) {
+  const ts = inc?.timestamps;
+  if (!ts?.received || !ts?.recovered) return null;
+  const start = ts.received?.toDate ? ts.received.toDate() : new Date(ts.recovered);
+  const end = ts.recovered?.toDate ? ts.recovered.toDate() : new Date(ts.recovered);
+  if (isNaN(start) || isNaN(end)) return null;
+  return Math.round((end - start) / 1000);
+}
+
+function syntaxHighlight(json) {
+  if (typeof json !== "string") json = JSON.stringify(json, null, 2);
+  return json.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"([^"]+)"(?=\s*:)/g, '<span class="json-key">"$1"</span>')
+    .replace(/:\s*"([^"]*)"/g, ': <span class="json-string">"$1"</span>')
+    .replace(/:\s*(\d+\.?\d*)/g, ': <span class="json-number">$1</span>')
+    .replace(/:\s*(true|false)/g, ': <span class="json-bool">$1</span>')
+    .replace(/:\s*(null)/g, ': <span class="json-null">$1</span>');
+}
+
+function showToast(msg) {
+  const t = document.getElementById("toast");
+  document.getElementById("toast-text").textContent = msg;
+  t.classList.remove("hidden");
+  setTimeout(() => t.classList.add("hidden"), 3000);
+}
+
+// ═══════════════ STATS ═══════════════
+function updateStats() {
+  const total = incidents.length;
+  const recovered = incidents.filter(i => i.status === "recovered").length;
+  const active = incidents.filter(i => !["recovered", "failed", "escalated"].includes(i.status)).length;
+  const revisions = new Set(incidents.map(i => i.failure_event?.revision_id).filter(Boolean)).size;
+
+  document.getElementById("stat-active").textContent = active;
+  document.getElementById("stat-recovery").textContent = total > 0 ? `${Math.round((recovered / total) * 100)}%` : "—";
+
+  const healTimes = incidents.filter(i => i.status === "recovered").map(healTime).filter(Boolean);
+  if (healTimes.length > 0) {
+    const avg = Math.round(healTimes.reduce((a, b) => a + b, 0) / healTimes.length);
+    document.getElementById("stat-heal-time").textContent = avg < 60 ? `${avg}s` : `${Math.round(avg / 60)}m`;
+  } else {
+    document.getElementById("stat-heal-time").textContent = "—";
+  }
+  document.getElementById("stat-revisions").textContent = revisions;
+}
+
+// ═══════════════ RENDER ═══════════════
+function getStepIndex(status) {
+  const order = ["received", "diagnosing", "action_taken", "verifying", "recovered", "failed", "escalated"];
+  const idx = order.indexOf(status);
+  return idx >= 0 ? idx : 0;
+}
+
+function renderStepper(status) {
+  const currentIdx = getStepIndex(status);
+  const isTerminal = ["recovered", "failed", "escalated"].includes(status);
+  const progress = isTerminal ? 100 : Math.min((currentIdx / (STEPS.length - 1)) * 100, 100);
+
+  return `
+    <div class="relative mt-3 mb-1">
+      <div class="h-0.5 w-full bg-zinc-800 rounded-full overflow-hidden">
+        <div class="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full step-bar" style="width: ${progress}%"></div>
+      </div>
+      <div class="flex justify-between mt-1.5">
+        ${STEPS.map((step, i) => {
+          const isActive = i === currentIdx;
+          const isDone = i < currentIdx || (isTerminal && i <= currentIdx);
+          return `<span class="text-[9px] font-medium ${isDone ? "text-zinc-400" : "text-zinc-600"} ${isActive ? "text-zinc-200" : ""}">${STEP_LABELS[step]}</span>`;
+        }).join("")}
+      </div>
+    </div>`;
+}
+
+function renderIncident(inc, id) {
+  const fe = inc.failure_event || {};
+  const rd = inc.recovery_decision || {};
+  const at = inc.action_taken || {};
+  const ts = inc.timestamps || {};
+  const ft = fe.failure_type || "unknown";
+  const ftInfo = FAILURE_LABELS[ft] || { label: ft, icon: "❓", color: "text-zinc-400 bg-zinc-500/10 border-zinc-500/20" };
+  const statusStyle = STATUS_STYLES[inc.status] || STATUS_STYLES.received;
+  const confidence = rd.confidence != null ? `${Math.round(rd.confidence * 100)}%` : "—";
+  const statusLabel = (inc.status || "received").replace(/_/g, " ");
+
+  return `
+    <div class="animate-fade-in rounded-xl border border-zinc-800/80 bg-zinc-900/50 backdrop-blur-sm hover:border-zinc-700/80 transition-all duration-200 overflow-hidden">
+      <!-- Header -->
+      <div class="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+        <div class="flex items-center gap-3 min-w-0">
+          <code class="text-xs font-mono text-zinc-500 truncate">${(id || "—").substring(0, 12)}</code>
+          <span class="text-[10px] text-zinc-600">${timeAgo(ts.received)}</span>
+          <span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium ${ftInfo.color}">
+            ${ftInfo.icon} ${ftInfo.label}
+          </span>
+        </div>
+        <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${statusStyle}">
+          ${statusLabel}
+        </span>
+      </div>
+
+      <!-- Stepper -->
+      <div class="px-4 pb-2">${renderStepper(inc.status)}</div>
+
+      <!-- AI Diagnosis -->
+      ${rd.diagnosed_cause || rd.reasoning ? `
+      <div class="mx-4 mb-3 rounded-lg border border-zinc-800/60 bg-zinc-950/50 p-3">
+        <div class="flex items-center gap-2 mb-1.5">
+          <span class="inline-flex items-center rounded bg-violet-500/10 border border-violet-500/20 px-1.5 py-0.5 text-[9px] font-semibold text-violet-400 uppercase tracking-wider">Gemini</span>
+          <span class="text-[10px] text-zinc-500">AI Diagnosis</span>
+          <span class="ml-auto text-[10px] font-mono text-zinc-500">${confidence}</span>
+        </div>
+        ${rd.diagnosed_cause ? `<p class="text-xs text-zinc-300 font-medium">${escHtml(rd.diagnosed_cause)}</p>` : ""}
+        ${rd.reasoning ? `<p class="text-[11px] text-zinc-500 mt-1 leading-relaxed">${escHtml(rd.reasoning)}</p>` : ""}
+      </div>` : ""}
+
+      <!-- Executed Action -->
+      ${at.action || rd.chosen_action ? `
+      <div class="mx-4 mb-3 flex items-center gap-2 flex-wrap">
+        <span class="text-[10px] text-zinc-600 uppercase tracking-wider font-medium">Action</span>
+        <code class="text-[11px] font-mono text-amber-400/80">${at.action || rd.chosen_action || "—"}</code>
+        ${at.success === true ? '<span class="text-[10px] text-emerald-500">✓ success</span>' : ""}
+        ${at.success === false ? '<span class="text-[10px] text-rose-400">✗ failed</span>' : ""}
+        ${at.error ? `<span class="text-[10px] text-rose-400/70 truncate max-w-xs" title="${escHtml(at.error)}">${escHtml(at.error.substring(0, 80))}</span>` : ""}
+      </div>` : ""}
+
+      <!-- Raw JSON Toggle -->
+      <div class="border-t border-zinc-800/60">
+        <button onclick="toggleJson('${id}')" class="w-full px-4 py-2 flex items-center gap-2 text-[11px] text-zinc-500 hover:text-zinc-400 transition-colors">
+          <i data-lucide="code-2" class="h-3 w-3"></i>
+          Raw Payload
+          <i data-lucide="chevron-down" class="h-3 w-3 ml-auto transition-transform" id="chevron-${id}"></i>
+        </button>
+        <div id="json-${id}" class="hidden px-4 pb-3 max-h-64 overflow-y-auto">
+          <pre class="text-[10px] font-mono leading-relaxed text-zinc-500 whitespace-pre-wrap">${syntaxHighlight(JSON.stringify(inc, (k, v) => {
+            if (v && typeof v === "object" && v.toDate) return v.toDate().toISOString();
+            return v;
+          }, 2))}</pre>
+        </div>
+      </div>
+    </div>`;
+}
+
+function escHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s || "";
+  return d.innerHTML;
+}
+
+function toggleJson(id) {
+  const el = document.getElementById(`json-${id}`);
+  const chevron = document.getElementById(`chevron-${id}`);
+  if (el) {
+    el.classList.toggle("hidden");
+    if (chevron) chevron.style.transform = el.classList.contains("hidden") ? "" : "rotate(180deg)";
+  }
+}
+
+function renderAll() {
+  const container = document.getElementById("incidents-container");
+  const emptyState = document.getElementById("empty-state");
+
+  if (incidents.length === 0) {
+    emptyState.classList.remove("hidden");
+    container.classList.add("hidden");
+    return;
+  }
+
+  emptyState.classList.add("hidden");
+  container.classList.remove("hidden");
+
+  // Sort by received time descending
+  incidents.sort((a, b) => {
+    const ta = a.timestamps?.received?.toDate ? a.timestamps.received.toDate() : new Date(a.timestamps?.received || 0);
+    const tb = b.timestamps?.received?.toDate ? b.timestamps.received.toDate() : new Date(b.timestamps?.received || 0);
+    return tb - ta;
+  });
+
+  container.innerHTML = incidents.map((inc, i) => renderIncident(inc, inc._id || `inc-${i}`)).join("");
+  lucide.createIcons();
+  updateStats();
+}
+
+// ═══════════════ FIRESTORE LISTENER ═══════════════
+function startListening() {
+  // Primary: listen to the specific service's incidents subcollection
+  const primaryQuery = db.collection("services").doc(SERVICE_ID).collection("incidents")
+    .orderBy("timestamps.received", "desc")
+    .limit(50);
+
+  unsubscribe = primaryQuery.onSnapshot(
+    (snapshot) => {
+      if (!snapshot.empty) {
+        processSnapshot(snapshot);
+        return;
+      }
+      // Fallback: collectionGroup query
+      fallbackListening();
+    },
+    (error) => {
+      console.warn("Primary query failed, trying fallback:", error.message);
+      fallbackListening();
+    }
+  );
+}
+
+function fallbackListening() {
+  if (unsubscribe) unsubscribe();
+  const fallbackQuery = db.collectionGroup("incidents")
+    .orderBy("timestamps.received", "desc")
+    .limit(50);
+
+  unsubscribe = fallbackQuery.onSnapshot(
+    (snapshot) => processSnapshot(snapshot),
+    (error) => {
+      console.error("Fallback query also failed:", error.message);
+      document.getElementById("empty-state").querySelector("p").textContent = "Connection error — check Firestore rules";
+    }
+  );
+}
+
+function processSnapshot(snapshot) {
+  incidents = [];
+  snapshot.forEach((doc) => {
+    const data = doc.data();
+    data._id = doc.id;
+    // Extract service_id from document path
+    const parent = doc.ref.parent.parent;
+    if (parent) data._service_id = parent.id;
+    incidents.push(data);
+  });
+  renderAll();
+}
+
+// ═══════════════ DEMO TRIGGERS ═══════════════
+async function triggerFailure(type) {
+  const targetUrl = "https://automend-target-247530183292.us-central1.run.app";
+  const endpoint = type === "reset" ? "/debug/reset" : "/debug/error-spike";
+
+  try {
+    const resp = await fetch(`${targetUrl}${endpoint}`, { method: "POST" });
+    const data = await resp.json();
+    showToast(data.status || `Triggered ${type}`);
+  } catch (e) {
+    showToast(`Failed: ${e.message}`);
+  }
+}
+
+// ═══════════════ INIT ═══════════════
+document.addEventListener("DOMContentLoaded", () => {
+  lucide.createIcons();
+  startListening();
+});
+
+window.addEventListener("beforeunload", () => {
+  if (unsubscribe) unsubscribe();
+});
+</script>
 </body>
 </html>
