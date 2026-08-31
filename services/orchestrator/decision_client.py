@@ -107,6 +107,19 @@ def _validate_decision(decision: dict[str, Any]) -> RecoveryDecision | None:
         return None
 
 
+def _get_id_token(audience: str) -> str:
+    """Fetch a Google OIDC ID token for Cloud Run service-to-service auth."""
+    if config.DISABLE_AUTH:
+        return "mock-local-token"
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2 import id_token
+        return id_token.fetch_id_token(Request(), audience)
+    except Exception as e:
+        logger.warning("Failed to acquire ID token for %s: %s", audience, e)
+        return ""
+
+
 async def get_diagnosis(failure_event: FailureEvent) -> RecoveryDecision:
     """Call the Diagnosis Agent's POST /diagnose endpoint.
 
@@ -116,12 +129,20 @@ async def get_diagnosis(failure_event: FailureEvent) -> RecoveryDecision:
     url = f"{config.DIAGNOSIS_AGENT_URL.rstrip('/')}/diagnose"
     payload = failure_event.model_dump(mode="json")
 
+    # Build auth headers for Cloud Run service-to-service auth
+    headers = {"Content-Type": "application/json"}
+    if not config.DISABLE_AUTH:
+        audience = config.DIAGNOSIS_AGENT_URL.rstrip("/")
+        token = _get_id_token(audience)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(config.DIAGNOSIS_TIMEOUT_SECONDS)
         ) as client:
             logger.info("Calling diagnosis agent at %s", url)
-            response = await client.post(url, json=payload)
+            response = await client.post(url, json=payload, headers=headers)
 
             if response.status_code != 200:
                 logger.warning(

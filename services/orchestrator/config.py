@@ -35,6 +35,9 @@ class Config:
     # This is the Target Service's Cloud Run service name (not the URL)
     TARGET_CLOUD_RUN_SERVICE: str = os.getenv("TARGET_CLOUD_RUN_SERVICE", "automend-target")
 
+    # Auth — set to "true" for local testing without Cloud Run IAM
+    DISABLE_AUTH: bool = os.getenv("DISABLE_AUTH", "false").lower() == "true"
+
     # Server
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", "8080"))

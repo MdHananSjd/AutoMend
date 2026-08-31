@@ -4,6 +4,14 @@
       "collectionGroup": "incidents",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "timestamps.received", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "incidents",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "timestamps.received", "order": "DESCENDING" }
       ]
     }

@@ -147,7 +147,7 @@ def execute_patch_env(decision: RecoveryDecision) -> dict[str, Any]:
     service = _get_current_service(service_name)
 
     # Update the env var in the container spec
-    for template in service.spec.template.spec.containers:
+    for template in service.template.containers:
         # Find and update or append the env var
         found = False
         for env in template.env:
@@ -161,9 +161,9 @@ def execute_patch_env(decision: RecoveryDecision) -> dict[str, Any]:
             )
 
     # Force a new revision by clearing the revision name
-    service.spec.template.metadata.name = ""
+    service.template.revision = ""
 
-    update_mask = "template.spec.containers.env,template.metadata"
+    update_mask = "template.containers.env"
     operation = client.update_service(
         service=service,
         update_mask=update_mask,
@@ -199,7 +199,7 @@ def execute_increase_memory(decision: RecoveryDecision) -> dict[str, Any]:
     service = _get_current_service(service_name)
 
     # Update memory limit in container resources
-    for template in service.spec.template.spec.containers:
+    for template in service.template.containers:
         if template.resources is None:
             template.resources = run_v2.types.ResourceRequirements()
         if template.resources.limits is None:
@@ -207,9 +207,9 @@ def execute_increase_memory(decision: RecoveryDecision) -> dict[str, Any]:
         template.resources.limits["memory"] = f"{memory_mb}Mi"
 
     # Force a new revision
-    service.spec.template.metadata.name = ""
+    service.template.revision = ""
 
-    update_mask = "template.spec.containers.resources,template.metadata"
+    update_mask = "template.containers.resources"
     operation = client.update_service(
         service=service,
         update_mask=update_mask,
@@ -239,10 +239,10 @@ def execute_restart(decision: RecoveryDecision) -> dict[str, Any]:
     client = _get_client()
     service = _get_current_service(service_name)
 
-    # Force a new revision by clearing the name
-    service.spec.template.metadata.name = ""
+    # Force a new revision by clearing the revision name
+    service.template.revision = ""
 
-    update_mask = "template.metadata"
+    update_mask = "template.labels"
     operation = client.update_service(
         service=service,
         update_mask=update_mask,
@@ -272,12 +272,12 @@ def execute_scale_down(decision: RecoveryDecision) -> dict[str, Any]:
     service = _get_current_service(service_name)
 
     # Set scaling limits — reduce to 0 min, 1 max
-    service.spec.scaling = run_v2.types.ServiceScaling(
+    service.template.scaling = run_v2.types.RevisionScaling(
         min_instance_count=0,
         max_instance_count=1,
     )
 
-    update_mask = "spec.scaling"
+    update_mask = "template.scaling"
     operation = client.update_service(
         service=service,
         update_mask=update_mask,
@@ -286,8 +286,8 @@ def execute_scale_down(decision: RecoveryDecision) -> dict[str, Any]:
 
     logger.info(
         "Scale down complete. Min=%s, Max=%s",
-        result.spec.scaling.min_instance_count,
-        result.spec.scaling.max_instance_count,
+        result.template.scaling.min_instance_count,
+        result.template.scaling.max_instance_count,
     )
 
     return {

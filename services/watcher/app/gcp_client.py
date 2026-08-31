@@ -85,16 +85,20 @@ class GCPClient:
         )
 
     def _fetch_real_gcp_data(self) -> Tuple[List[Dict[str, Any]], Dict[str, float], str, str]:
+        """Fetch real logs and metrics from Cloud Logging.
+
+        The Cloud Logging Python client returns entry.payload as
+        {"jsonPayload": {...actual log fields...}, "textPayload": "...", ...}.
+        We unwrap jsonPayload so classifier.py sees top-level field names
+        like status_code, path, event_type directly.
+        """
         from google.cloud import logging as cloud_logging
 
         logs: List[Dict[str, Any]] = []
         current_rev = "unknown"
         lkgr = "unknown"
-        metrics: Dict[str, float] = {
-            "error_rate": 0.0,
-            "memory_mb": 0,
-            "restart_count": 0,
-        }
+        error_count = 0
+        total_requests = 0
 
         try:
             log_client = cloud_logging.Client(project=Config.PROJECT_ID)
@@ -116,8 +120,14 @@ class GCPClient:
                     else "unknown"
                 )
 
+                # Unwrap jsonPayload — the Cloud Logging client nests the actual
+                # log fields inside {"jsonPayload": {...}}. We need them at the
+                # top level so classifier.py can read status_code, path, event_type.
                 if isinstance(entry.payload, dict):
-                    log_data = dict(entry.payload)
+                    if "jsonPayload" in entry.payload:
+                        log_data = dict(entry.payload["jsonPayload"])
+                    else:
+                        log_data = dict(entry.payload)
                 elif isinstance(entry.payload, str):
                     try:
                         log_data = json.loads(entry.payload)
@@ -137,6 +147,17 @@ class GCPClient:
                     if lkgr == "unknown":
                         lkgr = log_rev
 
+                # Count errors and total requests for metrics
+                sc = log_data.get("status_code")
+                if sc is not None:
+                    try:
+                        sc_val = float(sc)
+                        total_requests += 1
+                        if sc_val >= 500:
+                            error_count += 1
+                    except (ValueError, TypeError):
+                        pass
+
                 logs.append(log_data)
         except Exception as err:
             import logging
@@ -148,5 +169,12 @@ class GCPClient:
             current_rev = f"{Config.SERVICE_ID}-v1"
         if lkgr == "unknown":
             lkgr = current_rev
+
+        # Compute real metrics from fetched log entries
+        metrics: Dict[str, float] = {
+            "error_rate": error_count / total_requests if total_requests > 0 else 0.0,
+            "memory_mb": 0,
+            "restart_count": 0,
+        }
 
         return logs, metrics, current_rev, lkgr
